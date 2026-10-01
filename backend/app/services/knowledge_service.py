@@ -4,6 +4,7 @@
 unified_index 的 FTS 同步由 schema.sql 触发器自动维护。
 """
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -661,6 +662,107 @@ def get_latest_run(project_id: str, run_type: str, status: str = "success") -> O
             "ORDER BY started_at DESC LIMIT 1",
             (project_id, run_type, status),
         ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def next_module_version(module_id: str) -> str:
+    """标准化模块版本号：同 module_id 递增 v1,v2,…（模块表复合主键 (module_id, module_version)）。"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT module_version FROM module WHERE module_id = ?", (module_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+    nums = [
+        int(m.group(1)) for r in rows
+        for m in (re.match(r"v(\d+)", r["module_version"] or ""),) if m
+    ]
+    return f"v{max(nums) + 1 if nums else 1}"
+
+
+def record_module(module: dict) -> dict:
+    """写入标准化模块并同步统一索引（数据设计七.1，模块四 6.5）。
+
+    复合主键 (module_id, module_version) 由调用方经 next_module_version 预取后显式传入；
+    unified_index ref_id = "{module_id}:{module_version}"（get_item/list_items 的单主键
+    假设不适用 module，检索走下方专用 list_modules/get_module）。
+    """
+    module_id, version = module["module_id"], module["module_version"]
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO module(module_id, module_version, name, description, source_project_id,
+                source_paper_id, task_type, input_spec, output_spec, params_schema, tags,
+                verification, saved_module_compat, path, created_at, updated_at, schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1.0')
+            """,
+            (
+                module_id,
+                version,
+                module.get("name"),
+                module.get("description"),
+                module.get("source_project_id"),
+                module.get("source_paper_id"),
+                module.get("task_type"),
+                json.dumps(module.get("input_spec"), ensure_ascii=False) if module.get("input_spec") else None,
+                json.dumps(module.get("output_spec"), ensure_ascii=False) if module.get("output_spec") else None,
+                json.dumps(module.get("params_schema"), ensure_ascii=False) if module.get("params_schema") else None,
+                json.dumps(module.get("tags"), ensure_ascii=False) if module.get("tags") else None,
+                json.dumps(module.get("verification"), ensure_ascii=False) if module.get("verification") else None,
+                json.dumps(module.get("saved_module_compat"), ensure_ascii=False)
+                if module.get("saved_module_compat") else None,
+                module.get("path"),
+                _now(),
+                _now(),
+            ),
+        )
+        index_entry(
+            conn,
+            "module",
+            f"{module_id}:{version}",
+            title=module.get("name"),
+            summary=module.get("description"),
+            source_project_id=module.get("source_project_id"),
+            task_type=module.get("task_type"),
+            model_name=module.get("name"),
+            tags=module.get("tags"),
+            keywords=module.get("name"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"module_id": module_id, "module_version": version}
+
+
+def list_modules(limit: int = 100, offset: int = 0) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM module ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_module(module_id: str, module_version: Optional[str] = None) -> Optional[dict]:
+    """按 module_id 取最新版本；指定 module_version 取具体版本。"""
+    conn = get_connection()
+    try:
+        if module_version:
+            row = conn.execute(
+                "SELECT * FROM module WHERE module_id = ? AND module_version = ?",
+                (module_id, module_version),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM module WHERE module_id = ? ORDER BY created_at DESC LIMIT 1",
+                (module_id,),
+            ).fetchone()
     finally:
         conn.close()
     return dict(row) if row else None

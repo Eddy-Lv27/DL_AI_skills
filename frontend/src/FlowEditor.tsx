@@ -1,6 +1,8 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import React, { useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import type { GraphIR } from "./types/graph";
+import { buildGraphIR } from "./utils/graphIR";
 
 // Components
 import DiagramView from "./components/DiagramView";
@@ -29,7 +31,14 @@ import { estimateGraphCost } from "./utils/computeEstimator";
 
 const TRACE_SEED_PRESETS = [42, 1337, 1234, 2020, 2021];
 
-function FlowContent() {
+export type FlowEditorProps = {
+    /** 外部画布模式（模块四 B3）：以 GraphIR 快照初始化且不读写 localStorage。 */
+    initialGraph?: GraphIR | null;
+    /** 保存回调（结构化项目画布 → PUT /api/projects/{id}/graph）。 */
+    onSave?: (graph: GraphIR) => Promise<void>;
+};
+
+function FlowContent({ initialGraph, onSave }: FlowEditorProps) {
     // 1. Core Graph State
     const {
         nodes, setNodes,
@@ -37,7 +46,7 @@ function FlowContent() {
         onNodesChange, onEdgesChange,
         canUndo, canRedo, handleUndo, handleRedo,
         edgesWithHandlers
-    } = useGraphState();
+    } = useGraphState(initialGraph);
 
     // 2. Code Generation
     const { generated, generatedCode, onDownloadCode } = useCodeGeneration(nodes, edges);
@@ -128,6 +137,21 @@ function FlowContent() {
 
     // Helper for generating code toggle
     const handleGenerateCode = () => layout.setShowLiveCode(v => !v);
+
+    // 画布保存（模块四 B3 结构化项目最小闭环：全量 GraphIR v2 快照覆盖）
+    const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+    const handleSaveGraph = async () => {
+        if (!onSave || saveState === "saving") return;
+        setSaveState("saving");
+        try {
+            await onSave(buildGraphIR(nodes, edges));
+            setSaveState("saved");
+            setTimeout(() => setSaveState("idle"), 2000);
+        } catch (err) {
+            console.error("保存画布失败", err);
+            setSaveState("error");
+        }
+    };
 
     // File Upload (ref needed)
     const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -262,6 +286,35 @@ function FlowContent() {
                     setMainFlowRef={(rf) => { mainFlowRef.current = rf; }}
                 />
 
+                {onSave && (
+                    <button
+                        onClick={handleSaveGraph}
+                        disabled={saveState === "saving"}
+                        style={{
+                            position: "absolute",
+                            top: 12,
+                            right: 12,
+                            zIndex: 10,
+                            border: "1px solid #1f2a2f",
+                            borderRadius: 8,
+                            padding: "6px 14px",
+                            fontWeight: 600,
+                            fontSize: 12,
+                            cursor: saveState === "saving" ? "wait" : "pointer",
+                            background: saveState === "error" ? "#7f1d1d" : "#0f766e",
+                            color: "#e2e8f0",
+                        }}
+                    >
+                        {saveState === "saving"
+                            ? "保存中…"
+                            : saveState === "saved"
+                              ? "已保存 ✓"
+                              : saveState === "error"
+                                ? "保存失败，点击重试"
+                                : "保存到项目"}
+                    </button>
+                )}
+
                 {/* Panels & Overlays */}
                 {layout.showDiagnostics && trace.shapeResult && !trace.shapeResult.ok && (
                     <DiagnosticsPanel
@@ -387,10 +440,10 @@ function FlowContent() {
     );
 }
 
-export default function Flow() {
+export default function Flow({ initialGraph, onSave }: FlowEditorProps) {
     return (
         <ReactFlowProvider>
-            <FlowContent />
+            <FlowContent initialGraph={initialGraph} onSave={onSave} />
         </ReactFlowProvider>
     );
 }

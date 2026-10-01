@@ -34,6 +34,10 @@ TASK_TIMEOUTS: dict[str, float] = {
     "extract_items": 1800,
     "reproduce": 7200,
     "conclusion": 900,
+    "decompose": 1800,
+    "decompose_trace": 600,
+    "decompose_verify": 1800,
+    "module_ingest": 300,
 }
 
 

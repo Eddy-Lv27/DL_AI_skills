@@ -12,10 +12,11 @@ from app.db.connection import init_db
 from app.services import (
     task_manager, agent_service, env_manager, analysis_service,
     preprocess_service, baseline_service, dataset_service, compare_service, download_service,
-    paper_service,
+    paper_service, decompose_service,
 )
 from app.api import (
     tasks, projects, knowledge, agents, environments, search, analysis, preprocess, datasets, papers,
+    decompose, modules,
 )
 
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     dataset_service.register()
     compare_service.register()
     paper_service.register()
+    decompose_service.register()
     await task_manager.start()
     yield
     await task_manager.stop()
@@ -64,6 +66,9 @@ app.include_router(analysis.router)
 app.include_router(preprocess.router)
 app.include_router(datasets.router)
 app.include_router(papers.router)
+app.include_router(decompose.router)
+app.include_router(decompose.ir_router)
+app.include_router(modules.router)
 
 
 @app.get("/api/health")
